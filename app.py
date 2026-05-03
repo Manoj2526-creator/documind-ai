@@ -1,5 +1,6 @@
 import streamlit as st
 import tempfile
+import base64
 
 from supabase import create_client
 from langchain_community.document_loaders import PyPDFLoader
@@ -14,7 +15,7 @@ SUPABASE_KEY = "sb_publishable_Uel1XdBIV2dLeZj8LBgcbQ_g0-A770T"  # <-- paste you
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# MUST match bucket exactly
+# MUST match your bucket name exactly (lowercase)
 BUCKET = "documents"
 
 # =========================
@@ -25,26 +26,36 @@ st.title("📄 DocuMind AI")
 st.caption("Upload once • Search anytime • View instantly")
 
 # =========================
-# 📄 SAFE PDF VIEW
+# 📄 PDF VIEW (SAFE)
 # =========================
 def display_pdf(file_bytes, file_name):
     st.download_button(
-        label="📥 Download & View PDF",
+        label=f"📥 Download {file_name}",
         data=file_bytes,
         file_name=file_name,
-        mime="application/pdf"
+        mime="application/pdf",
     )
-    st.info("Preview disabled for compatibility. Tap download to view.")
+
+    # Safe preview for smaller PDFs (< 2MB)
+    if len(file_bytes) < 2_000_000:
+        b64 = base64.b64encode(file_bytes).decode("utf-8")
+        html = f"""
+        <iframe src="data:application/pdf;base64,{b64}"
+        width="100%" height="500px"></iframe>
+        """
+        st.markdown(html, unsafe_allow_html=True)
+    else:
+        st.info("Preview disabled for large file. Use download to view.")
 
 # =========================
-# ☁️ SUPABASE FUNCTIONS
+# ☁️ SUPABASE HELPERS
 # =========================
 def upload_file(file):
     try:
         supabase.storage.from_(BUCKET).upload(
             file.name,
             file.getvalue(),
-            {"upsert": "true"}   # IMPORTANT FIX
+            {"upsert": "true"},  # must be string
         )
         st.success(f"✅ Uploaded: {file.name}")
     except Exception as e:
@@ -69,7 +80,7 @@ def download_file(name):
 uploaded_files = st.file_uploader(
     "📤 Upload your documents",
     type=["pdf"],
-    accept_multiple_files=True
+    accept_multiple_files=True,
 )
 
 if uploaded_files:
@@ -80,14 +91,15 @@ if uploaded_files:
 # 📂 LOAD FILES
 # =========================
 saved_files = list_files()
-
 file_map = {}
 
 for f in saved_files:
-    name = f["name"]
-    file_bytes = download_file(name)
-    if file_bytes:
-        file_map[name] = file_bytes
+    name = f.get("name")
+    if not name:
+        continue
+    fb = download_file(name)
+    if fb:
+        file_map[name] = fb
 
 if file_map:
     st.success(f"📂 Loaded {len(file_map)} documents")
@@ -95,12 +107,11 @@ else:
     st.info("Upload documents to begin")
 
 # =========================
-# 🧠 BUILD AI SEARCH
+# 🧠 BUILD VECTOR DB (AI)
 # =========================
 @st.cache_resource
 def build_db(file_map):
     docs = []
-
     for name, file_bytes in file_map.items():
         try:
             with tempfile.NamedTemporaryFile(delete=False) as tmp:
@@ -121,37 +132,42 @@ def build_db(file_map):
         return None
 
     embeddings = HuggingFaceEmbeddings()
-    db = FAISS.from_documents(docs, embeddings)
-    return db
+    return FAISS.from_documents(docs, embeddings)
 
 db = build_db(file_map) if file_map else None
 
 # =========================
-# 🔍 SEARCH
+# 🔍 SEARCH (IMPROVED)
 # =========================
 query = st.text_input("🔍 Search your document")
 
 if query and file_map:
-    query = query.lower()
+    q = query.lower().strip()
 
-    # 1️⃣ Filename search
-    found = None
-    for name in file_map:
-        if query in name.lower():
-            found = name
-            break
+    # 1️⃣ Filename matches (show ALL matches)
+    matches = [n for n in file_map if q in n.lower()]
 
-    if found:
-        st.success(f"📄 Found: {found}")
-        display_pdf(file_map[found], found)
+    if matches:
+        st.success(f"📄 Found {len(matches)} file(s) by name")
+        for name in matches:
+            with st.expander(name, expanded=(len(matches) == 1)):
+                display_pdf(file_map[name], name)
 
-    # 2️⃣ AI search
+    # 2️⃣ AI fallback (only if no filename match)
     elif db:
-        results = db.similarity_search(query, k=1)
+        results = db.similarity_search(q, k=3)
 
         if results:
-            file_name = results[0].metadata["source"]
-            st.success(f"🤖 Found (AI): {file_name}")
-            display_pdf(file_map[file_name], file_name)
+            # Collect unique file names from top results
+            seen = []
+            for r in results:
+                src = r.metadata.get("source")
+                if src and src not in seen:
+                    seen.append(src)
+
+            st.warning("⚠️ No exact filename match. Showing closest results:")
+            for name in seen:
+                with st.expander(name, expanded=(len(seen) == 1)):
+                    display_pdf(file_map[name], name)
         else:
-            st.warning("❌ No document found")
+            st.error("❌ No document found")
