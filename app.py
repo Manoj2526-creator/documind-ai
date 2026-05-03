@@ -1,148 +1,157 @@
-import os
 import base64
 import tempfile
 import streamlit as st
 
+from supabase import create_client
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
-# 🎨 PAGE CONFIG
+# =========================
+# 🔐 SUPABASE CONFIG
+# =========================
+SUPABASE_URL = "https://sfaehfajojbjfazxfmqu.supabase.co"
+SUPABASE_KEY = "sb_publishable_Uel1XdBIV2dLeZj8LBgcbQ_g0-A770T"  # <-- paste here
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+BUCKET = "documents"
+
+# =========================
+# 🎨 UI
+# =========================
 st.set_page_config(page_title="DocuMind AI", layout="wide")
+st.title("📄 DocuMind AI")
+st.caption("Upload once • Search anytime • View instantly")
 
-# 🎨 CUSTOM UI
-st.markdown("""
-<style>
-.title {
-    font-size: 38px;
-    font-weight: bold;
-}
-.subtitle {
-    color: gray;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# 🧭 SIDEBAR
-st.sidebar.title("📂 DocuMind AI")
-st.sidebar.write("Your Personal Document Assistant")
-
-menu = st.sidebar.radio("Navigation", ["🔍 Search Documents", "ℹ️ About"])
-
-# 📄 PDF DISPLAY FUNCTION
+# =========================
+# 📄 PDF VIEWER
+# =========================
 def display_pdf(file_bytes):
     base64_pdf = base64.b64encode(file_bytes).decode("utf-8")
     pdf_display = f"""
-    <iframe src="data:application/pdf;base64,{base64_pdf}" 
-    width="100%" height="600px" type="application/pdf"></iframe>
+    <iframe src="data:application/pdf;base64,{base64_pdf}"
+    width="100%" height="600px"></iframe>
     """
     st.markdown(pdf_display, unsafe_allow_html=True)
 
-# 🔍 SEARCH PAGE
-if menu == "🔍 Search Documents":
+# =========================
+# ☁️ SUPABASE FUNCTIONS
+# =========================
+def upload_file(file):
+    try:
+        supabase.storage.from_(BUCKET).upload(file.name, file.getvalue())
+        st.success(f"Uploaded: {file.name}")
+    except Exception as e:
+        if "already exists" in str(e).lower():
+            st.info(f"Already exists: {file.name}")
+        else:
+            st.error(f"Upload error: {file.name}")
 
-    st.markdown('<p class="title">📄 My AI Document Assistant</p>', unsafe_allow_html=True)
-    st.markdown('<p class="subtitle">Upload and search your documents instantly</p>', unsafe_allow_html=True)
+def list_files():
+    try:
+        return supabase.storage.from_(BUCKET).list()
+    except:
+        return []
 
-    # 📤 FILE UPLOAD
-    uploaded_files = st.file_uploader(
-        "📤 Upload your PDF documents",
-        type=["pdf"],
-        accept_multiple_files=True
-    )
+def download_file(name):
+    return supabase.storage.from_(BUCKET).download(name)
 
-    # 🧠 CREATE DB
-    @st.cache_resource
-    def create_db(files):
-        documents = []
+# =========================
+# 📤 UPLOAD SECTION
+# =========================
+uploaded_files = st.file_uploader(
+    "📤 Upload your documents",
+    type=["pdf"],
+    accept_multiple_files=True
+)
 
-        for file in files:
-            try:
-                # Save temporarily
-                with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                    tmp.write(file.read())
-                    tmp_path = tmp.name
+if uploaded_files:
+    for f in uploaded_files:
+        upload_file(f)
 
-                loader = PyPDFLoader(tmp_path)
-                docs = loader.load()
+# =========================
+# 📂 LOAD SAVED FILES
+# =========================
+saved_files = list_files()
 
-                for doc in docs:
-                    doc.metadata["source"] = file.name
+file_map = {}
 
-                documents.extend(docs)
+for f in saved_files:
+    try:
+        name = f["name"]
+        file_map[name] = download_file(name)
+    except:
+        pass
 
-            except:
-                st.warning(f"Error reading {file.name}")
+if file_map:
+    st.success(f"📂 Loaded {len(file_map)} saved documents")
+else:
+    st.info("Upload documents to begin")
 
-        embeddings = HuggingFaceEmbeddings()
-        db = FAISS.from_documents(documents, embeddings)
-        return db
+# =========================
+# 🧠 BUILD AI SEARCH
+# =========================
+@st.cache_resource
+def build_db(file_map):
+    docs = []
 
-    if uploaded_files:
-        db = create_db(uploaded_files)
+    for name, file_bytes in file_map.items():
+        try:
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                tmp.write(file_bytes)
+                path = tmp.name
 
-        query = st.text_input("🔍 Search your document (e.g., Aadhaar, SSLC, Resume):")
+            loader = PyPDFLoader(path)
+            pages = loader.load()
 
-        if query:
-            query = query.lower()
+            for p in pages:
+                p.metadata["source"] = name
 
-            # 🔥 Step 1: Filename match
-            found_file = None
-            found_bytes = None
+            docs.extend(pages)
+        except:
+            st.warning(f"Error reading {name}")
 
-            for file in uploaded_files:
-                if query in file.name.lower():
-                    found_file = file.name
-                    found_bytes = file.getvalue()
-                    break
+    if not docs:
+        return None
 
-            # ✅ If filename match
-            if found_file:
-                st.success(f"📄 Found (Filename Match): {found_file}")
+    embeddings = HuggingFaceEmbeddings()
+    db = FAISS.from_documents(docs, embeddings)
+    return db
 
-                display_pdf(found_bytes)
+db = build_db(file_map) if file_map else None
 
-                st.download_button("📥 Download File", found_bytes, found_file)
+# =========================
+# 🔍 SEARCH
+# =========================
+query = st.text_input("🔍 Search your document")
 
-            # 🔥 Step 2: AI search
-            else:
-                results = db.similarity_search(query, k=1)
+if query and file_map:
+    query = query.lower()
 
-                if results:
-                    file_name = results[0].metadata.get("source")
+    # 🔥 1. Filename match
+    found = None
+    for name in file_map:
+        if query in name.lower():
+            found = name
+            break
 
-                    st.success(f"📄 Found (AI Match): {file_name}")
+    if found:
+        st.success(f"Found: {found}")
+        file_bytes = file_map[found]
 
-                    # find file bytes
-                    for file in uploaded_files:
-                        if file.name == file_name:
-                            file_bytes = file.getvalue()
-                            display_pdf(file_bytes)
+        display_pdf(file_bytes)
+        st.download_button("Download", file_bytes, found)
 
-                            st.download_button("📥 Download File", file_bytes, file_name)
-                            break
-                else:
-                    st.warning("❌ No matching document found")
+    # 🔥 2. AI search
+    elif db:
+        results = db.similarity_search(query, k=1)
 
-    else:
-        st.info("📤 Upload documents to start")
+        if results:
+            file_name = results[0].metadata["source"]
+            st.success(f"Found (AI): {file_name}")
 
-# ℹ️ ABOUT PAGE
-elif menu == "ℹ️ About":
-
-    st.title("ℹ️ About DocuMind AI")
-
-    st.write("""
-    **DocuMind AI** is your personal document assistant.
-
-    🔹 Upload and search documents instantly  
-    🔹 View PDFs inside the app  
-    🔹 Download files easily  
-    🔹 Works on mobile and desktop  
-
-    Built using:
-    - Python 🐍
-    - Streamlit ⚡
-    - LangChain 🧠
-    - FAISS 🔍
-    """)
+            file_bytes = file_map[file_name]
+            display_pdf(file_bytes)
+            st.download_button("Download", file_bytes, file_name)
+        else:
+            st.warning("No document found")
