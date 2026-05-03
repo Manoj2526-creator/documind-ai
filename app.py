@@ -16,7 +16,7 @@ SUPABASE_KEY = "sb_publishable_Uel1XdBIV2dLeZj8LBgcbQ_g0-A770T"  # <-- paste you
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ⚠️ MUST MATCH YOUR BUCKET NAME EXACTLY
-BUCKET = "DOCUMENTS"
+BUCKET = "documents"
 
 # =========================
 # 🎨 UI
