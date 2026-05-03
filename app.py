@@ -1,6 +1,5 @@
-import base64
-import tempfile
 import streamlit as st
+import tempfile
 
 from supabase import create_client
 from langchain_community.document_loaders import PyPDFLoader
@@ -15,7 +14,7 @@ SUPABASE_KEY = "sb_publishable_Uel1XdBIV2dLeZj8LBgcbQ_g0-A770T"  # <-- paste you
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ⚠️ MUST MATCH YOUR BUCKET NAME EXACTLY
+# MUST match bucket exactly
 BUCKET = "documents"
 
 # =========================
@@ -26,15 +25,16 @@ st.title("📄 DocuMind AI")
 st.caption("Upload once • Search anytime • View instantly")
 
 # =========================
-# 📄 PDF VIEWER
+# 📄 SAFE PDF VIEW
 # =========================
-def display_pdf(file_bytes):
-    base64_pdf = base64.b64encode(file_bytes).decode("utf-8")
-    pdf_display = f"""
-    <iframe src="data:application/pdf;base64,{base64_pdf}"
-    width="100%" height="600px"></iframe>
-    """
-    st.markdown(pdf_display, unsafe_allow_html=True)
+def display_pdf(file_bytes, file_name):
+    st.download_button(
+        label="📥 Download & View PDF",
+        data=file_bytes,
+        file_name=file_name,
+        mime="application/pdf"
+    )
+    st.info("Preview disabled for compatibility. Tap download to view.")
 
 # =========================
 # ☁️ SUPABASE FUNCTIONS
@@ -44,7 +44,7 @@ def upload_file(file):
         supabase.storage.from_(BUCKET).upload(
             file.name,
             file.getvalue(),
-            {"upsert": "true"}   # ✅ FIXED (string, not boolean)
+            {"upsert": "true"}   # IMPORTANT FIX
         )
         st.success(f"✅ Uploaded: {file.name}")
     except Exception as e:
@@ -64,7 +64,7 @@ def download_file(name):
         return None
 
 # =========================
-# 📤 UPLOAD SECTION
+# 📤 UPLOAD
 # =========================
 uploaded_files = st.file_uploader(
     "📤 Upload your documents",
@@ -77,7 +77,7 @@ if uploaded_files:
         upload_file(f)
 
 # =========================
-# 📂 LOAD SAVED FILES
+# 📂 LOAD FILES
 # =========================
 saved_files = list_files()
 
@@ -90,7 +90,7 @@ for f in saved_files:
         file_map[name] = file_bytes
 
 if file_map:
-    st.success(f"📂 Loaded {len(file_map)} saved documents")
+    st.success(f"📂 Loaded {len(file_map)} documents")
 else:
     st.info("Upload documents to begin")
 
@@ -134,7 +134,7 @@ query = st.text_input("🔍 Search your document")
 if query and file_map:
     query = query.lower()
 
-    # 🔥 1. Filename match
+    # 1️⃣ Filename search
     found = None
     for name in file_map:
         if query in name.lower():
@@ -143,21 +143,15 @@ if query and file_map:
 
     if found:
         st.success(f"📄 Found: {found}")
-        file_bytes = file_map[found]
+        display_pdf(file_map[found], found)
 
-        display_pdf(file_bytes)
-        st.download_button("📥 Download", file_bytes, found)
-
-    # 🔥 2. AI search
+    # 2️⃣ AI search
     elif db:
         results = db.similarity_search(query, k=1)
 
         if results:
             file_name = results[0].metadata["source"]
             st.success(f"🤖 Found (AI): {file_name}")
-
-            file_bytes = file_map[file_name]
-            display_pdf(file_bytes)
-            st.download_button("📥 Download", file_bytes, file_name)
+            display_pdf(file_map[file_name], file_name)
         else:
             st.warning("❌ No document found")
