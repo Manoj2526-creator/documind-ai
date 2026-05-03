@@ -1,10 +1,11 @@
 import streamlit as st
 import base64
 import difflib
+import requests
 from supabase import create_client
 
 # =========================
-# 🔐 CONFIG (CHANGE THIS)
+# 🔐 CONFIG (EDIT THIS)
 # =========================
 SUPABASE_URL = "https://sfaehfajojbjfaxzfmqu.supabase.co"
 SUPABASE_KEY = "sb_publishable_Uel1XdBIV2dLeZj8LBgcbQ_g0-A770T"  # <-- paste your key here
@@ -26,7 +27,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# 📤 UPLOAD FILE
+# 📤 UPLOAD
 # =========================
 uploaded_files = st.file_uploader(
     "📤 Upload your documents",
@@ -39,11 +40,11 @@ def upload_file(file):
         supabase.storage.from_(BUCKET).upload(
             file.name,
             file.getvalue(),
-            {"upsert": "true"}   # IMPORTANT FIX
+            {"upsert": "true"}  # 🔥 IMPORTANT FIX
         )
         return True
-    except Exception as e:
-        st.error(f"Upload error: {file.name}")
+    except Exception:
+        st.error(f"❌ Upload error: {file.name}")
         return False
 
 if uploaded_files:
@@ -51,7 +52,7 @@ if uploaded_files:
         upload_file(file)
 
 # =========================
-# 📂 LOAD FILES FROM SUPABASE
+# 📂 LOAD FILES
 # =========================
 file_map = {}
 
@@ -62,7 +63,6 @@ try:
         name = f["name"]
         url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET}/{name}"
 
-        import requests
         res = requests.get(url)
 
         if res.status_code == 200:
@@ -71,34 +71,51 @@ try:
     if file_map:
         st.success(f"📁 Loaded {len(file_map)} documents")
 
-except Exception as e:
+except Exception:
     st.error("⚠️ Error loading files")
 
 # =========================
-# 🔍 SMART SEARCH
+# 🔍 SMART SEARCH (UPGRADED)
 # =========================
+def normalize(text):
+    return "".join(e.lower() for e in text if e.isalnum())
+
 def smart_search(query, filenames):
-    query = query.lower().strip()
+    query_norm = normalize(query)
+    query_words = query.lower().split()
 
-    # partial match
-    direct = [f for f in filenames if query in f.lower()]
+    scored_results = []
 
-    # fuzzy match
-    fuzzy = difflib.get_close_matches(query, filenames, n=5, cutoff=0.3)
+    for file in filenames:
+        file_lower = file.lower()
+        file_norm = normalize(file)
 
-    # word match
-    words = query.split()
-    word_match = [
-        f for f in filenames
-        if any(w in f.lower() for w in words)
-    ]
+        score = 0
 
-    return list(set(direct + fuzzy + word_match))
+        # Strong match
+        if query_norm in file_norm:
+            score += 100
+
+        # Word match
+        for word in query_words:
+            if word in file_lower:
+                score += 30
+
+        # Fuzzy similarity
+        similarity = difflib.SequenceMatcher(None, query_norm, file_norm).ratio()
+        score += similarity * 50
+
+        if score > 20:
+            scored_results.append((file, score))
+
+    scored_results.sort(key=lambda x: x[1], reverse=True)
+
+    return [file for file, _ in scored_results]
 
 # =========================
 # 🔎 SEARCH UI
 # =========================
-query = st.text_input("🔍 Search your document")
+query = st.text_input("🔍 Search anything (Aadhaar, result, caste...)")
 
 if query and file_map:
     results = smart_search(query, list(file_map.keys()))
@@ -140,7 +157,7 @@ if query and file_map:
         st.error("❌ No document found")
 
 # =========================
-# 👁 VIEW PDF
+# 👁 VIEW PDF (MOBILE FIX)
 # =========================
 if "view_file" in st.session_state:
     name = st.session_state["view_file"]
