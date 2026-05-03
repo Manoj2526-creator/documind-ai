@@ -1,7 +1,3 @@
 streamlit
-langchain
-langchain-community
-faiss-cpu
-pypdf
-sentence-transformers
 supabase
+requests
