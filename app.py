@@ -10,7 +10,7 @@ from langchain_community.vectorstores import FAISS
 # =========================
 # 🔐 SUPABASE CONFIG
 # =========================
-SUPABASE_URL = "https://sfaehfajojbjfazxfmqu.supabase.co"
+SUPABASE_URL = "https://sfaehfajojbjfaxzfmqu.supabase.co"
 SUPABASE_KEY = "sb_publishable_Uel1XdBIV2dLeZj8LBgcbQ_g0-A770T"  # <-- paste your key here
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
