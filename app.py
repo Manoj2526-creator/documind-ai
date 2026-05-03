@@ -14,7 +14,9 @@ SUPABASE_URL = "https://sfaehfajojbjfazxfmqu.supabase.co"
 SUPABASE_KEY = "sb_publishable_Uel1XdBIV2dLeZj8LBgcbQ_g0-A770T"  # <-- paste here
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-BUCKET = "documents"
+
+# ⚠️ MUST MATCH YOUR BUCKET NAME EXACTLY
+BUCKET = "DOCUMENTS"
 
 # =========================
 # 🎨 UI
@@ -39,13 +41,15 @@ def display_pdf(file_bytes):
 # =========================
 def upload_file(file):
     try:
-        supabase.storage.from_(BUCKET).upload(file.name, file.getvalue())
+        supabase.storage.from_(BUCKET).upload(
+            file.name,
+            file.getvalue(),
+            {"upsert": True}   # 🔥 FIX
+        )
         st.success(f"Uploaded: {file.name}")
     except Exception as e:
-        if "already exists" in str(e).lower():
-            st.info(f"Already exists: {file.name}")
-        else:
-            st.error(f"Upload error: {file.name}")
+        st.error(f"Upload error: {file.name}")
+        st.write(e)
 
 def list_files():
     try:
