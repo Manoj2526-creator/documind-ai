@@ -11,7 +11,7 @@ from langchain_community.vectorstores import FAISS
 # 🔐 SUPABASE CONFIG
 # =========================
 SUPABASE_URL = "https://sfaehfajojbjfazxfmqu.supabase.co"
-SUPABASE_KEY = "sb_publishable_Uel1XdBIV2dLeZj8LBgcbQ_g0-A770T"  # <-- paste here
+SUPABASE_KEY = "sb_publishable_Uel1XdBIV2dLeZj8LBgcbQ_g0-A770T"  # <-- paste your key here
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -44,11 +44,11 @@ def upload_file(file):
         supabase.storage.from_(BUCKET).upload(
             file.name,
             file.getvalue(),
-            {"upsert": True}   # 🔥 FIX
+            {"upsert": "true"}   # ✅ FIXED (string, not boolean)
         )
-        st.success(f"Uploaded: {file.name}")
+        st.success(f"✅ Uploaded: {file.name}")
     except Exception as e:
-        st.error(f"Upload error: {file.name}")
+        st.error(f"❌ Upload error: {file.name}")
         st.write(e)
 
 def list_files():
@@ -58,7 +58,10 @@ def list_files():
         return []
 
 def download_file(name):
-    return supabase.storage.from_(BUCKET).download(name)
+    try:
+        return supabase.storage.from_(BUCKET).download(name)
+    except:
+        return None
 
 # =========================
 # 📤 UPLOAD SECTION
@@ -81,11 +84,10 @@ saved_files = list_files()
 file_map = {}
 
 for f in saved_files:
-    try:
-        name = f["name"]
-        file_map[name] = download_file(name)
-    except:
-        pass
+    name = f["name"]
+    file_bytes = download_file(name)
+    if file_bytes:
+        file_map[name] = file_bytes
 
 if file_map:
     st.success(f"📂 Loaded {len(file_map)} saved documents")
@@ -113,7 +115,7 @@ def build_db(file_map):
 
             docs.extend(pages)
         except:
-            st.warning(f"Error reading {name}")
+            st.warning(f"⚠️ Error reading {name}")
 
     if not docs:
         return None
@@ -140,11 +142,11 @@ if query and file_map:
             break
 
     if found:
-        st.success(f"Found: {found}")
+        st.success(f"📄 Found: {found}")
         file_bytes = file_map[found]
 
         display_pdf(file_bytes)
-        st.download_button("Download", file_bytes, found)
+        st.download_button("📥 Download", file_bytes, found)
 
     # 🔥 2. AI search
     elif db:
@@ -152,10 +154,10 @@ if query and file_map:
 
         if results:
             file_name = results[0].metadata["source"]
-            st.success(f"Found (AI): {file_name}")
+            st.success(f"🤖 Found (AI): {file_name}")
 
             file_bytes = file_map[file_name]
             display_pdf(file_bytes)
-            st.download_button("Download", file_bytes, file_name)
+            st.download_button("📥 Download", file_bytes, file_name)
         else:
-            st.warning("No document found")
+            st.warning("❌ No document found")
