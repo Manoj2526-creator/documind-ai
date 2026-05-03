@@ -1,173 +1,157 @@
 import streamlit as st
-import tempfile
 import base64
-
+import difflib
 from supabase import create_client
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
 
 # =========================
-# 🔐 SUPABASE CONFIG
+# 🔐 CONFIG (CHANGE THIS)
 # =========================
 SUPABASE_URL = "https://sfaehfajojbjfaxzfmqu.supabase.co"
 SUPABASE_KEY = "sb_publishable_Uel1XdBIV2dLeZj8LBgcbQ_g0-A770T"  # <-- paste your key here
+BUCKET = "documents"  # must be lowercase
 
+# =========================
+# 🔌 CONNECT
+# =========================
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# MUST match your bucket name exactly (lowercase)
-BUCKET = "documents"
-
-# =========================
-# 🎨 UI
-# =========================
 st.set_page_config(page_title="DocuMind AI", layout="wide")
-st.title("📄 DocuMind AI")
-st.caption("Upload once • Search anytime • View instantly")
 
 # =========================
-# 📄 PDF VIEW (SAFE)
+# 🎨 HEADER
 # =========================
-def display_pdf(file_bytes, file_name):
-    st.download_button(
-        label=f"📥 Download {file_name}",
-        data=file_bytes,
-        file_name=file_name,
-        mime="application/pdf",
-    )
-
-    # Safe preview for smaller PDFs (< 2MB)
-    if len(file_bytes) < 2_000_000:
-        b64 = base64.b64encode(file_bytes).decode("utf-8")
-        html = f"""
-        <iframe src="data:application/pdf;base64,{b64}"
-        width="100%" height="500px"></iframe>
-        """
-        st.markdown(html, unsafe_allow_html=True)
-    else:
-        st.info("Preview disabled for large file. Use download to view.")
+st.markdown("""
+<h1 style='text-align:center;'>📄 DocuMind AI</h1>
+<p style='text-align:center;color:gray;'>Upload once • Search anytime • View instantly</p>
+""", unsafe_allow_html=True)
 
 # =========================
-# ☁️ SUPABASE HELPERS
+# 📤 UPLOAD FILE
 # =========================
+uploaded_files = st.file_uploader(
+    "📤 Upload your documents",
+    type=["pdf"],
+    accept_multiple_files=True
+)
+
 def upload_file(file):
     try:
         supabase.storage.from_(BUCKET).upload(
             file.name,
             file.getvalue(),
-            {"upsert": "true"},  # must be string
+            {"upsert": "true"}   # IMPORTANT FIX
         )
-        st.success(f"✅ Uploaded: {file.name}")
+        return True
     except Exception as e:
-        st.error(f"❌ Upload error: {file.name}")
-        st.write(e)
-
-def list_files():
-    try:
-        return supabase.storage.from_(BUCKET).list()
-    except:
-        return []
-
-def download_file(name):
-    try:
-        return supabase.storage.from_(BUCKET).download(name)
-    except:
-        return None
-
-# =========================
-# 📤 UPLOAD
-# =========================
-uploaded_files = st.file_uploader(
-    "📤 Upload your documents",
-    type=["pdf"],
-    accept_multiple_files=True,
-)
+        st.error(f"Upload error: {file.name}")
+        return False
 
 if uploaded_files:
-    for f in uploaded_files:
-        upload_file(f)
+    for file in uploaded_files:
+        upload_file(file)
 
 # =========================
-# 📂 LOAD FILES
+# 📂 LOAD FILES FROM SUPABASE
 # =========================
-saved_files = list_files()
 file_map = {}
 
-for f in saved_files:
-    name = f.get("name")
-    if not name:
-        continue
-    fb = download_file(name)
-    if fb:
-        file_map[name] = fb
+try:
+    files = supabase.storage.from_(BUCKET).list()
 
-if file_map:
-    st.success(f"📂 Loaded {len(file_map)} documents")
-else:
-    st.info("Upload documents to begin")
+    for f in files:
+        name = f["name"]
+        url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET}/{name}"
 
-# =========================
-# 🧠 BUILD VECTOR DB (AI)
-# =========================
-@st.cache_resource
-def build_db(file_map):
-    docs = []
-    for name, file_bytes in file_map.items():
-        try:
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                tmp.write(file_bytes)
-                path = tmp.name
+        import requests
+        res = requests.get(url)
 
-            loader = PyPDFLoader(path)
-            pages = loader.load()
+        if res.status_code == 200:
+            file_map[name] = res.content
 
-            for p in pages:
-                p.metadata["source"] = name
+    if file_map:
+        st.success(f"📁 Loaded {len(file_map)} documents")
 
-            docs.extend(pages)
-        except:
-            st.warning(f"⚠️ Error reading {name}")
-
-    if not docs:
-        return None
-
-    embeddings = HuggingFaceEmbeddings()
-    return FAISS.from_documents(docs, embeddings)
-
-db = build_db(file_map) if file_map else None
+except Exception as e:
+    st.error("⚠️ Error loading files")
 
 # =========================
-# 🔍 SEARCH (IMPROVED)
+# 🔍 SMART SEARCH
+# =========================
+def smart_search(query, filenames):
+    query = query.lower().strip()
+
+    # partial match
+    direct = [f for f in filenames if query in f.lower()]
+
+    # fuzzy match
+    fuzzy = difflib.get_close_matches(query, filenames, n=5, cutoff=0.3)
+
+    # word match
+    words = query.split()
+    word_match = [
+        f for f in filenames
+        if any(w in f.lower() for w in words)
+    ]
+
+    return list(set(direct + fuzzy + word_match))
+
+# =========================
+# 🔎 SEARCH UI
 # =========================
 query = st.text_input("🔍 Search your document")
 
 if query and file_map:
-    q = query.lower().strip()
+    results = smart_search(query, list(file_map.keys()))
 
-    # 1️⃣ Filename matches (show ALL matches)
-    matches = [n for n in file_map if q in n.lower()]
+    if results:
+        st.success(f"📄 Found {len(results)} document(s)")
 
-    if matches:
-        st.success(f"📄 Found {len(matches)} file(s) by name")
-        for name in matches:
-            with st.expander(name, expanded=(len(matches) == 1)):
-                display_pdf(file_map[name], name)
+        for name in results:
+            file_bytes = file_map[name]
 
-    # 2️⃣ AI fallback (only if no filename match)
-    elif db:
-        results = db.similarity_search(q, k=3)
+            st.markdown(f"""
+            <div style="
+                background:#111827;
+                padding:15px;
+                border-radius:12px;
+                margin-bottom:10px;
+                border:1px solid #1f2937;
+            ">
+                <h4 style="margin:0;">📄 {name}</h4>
+            </div>
+            """, unsafe_allow_html=True)
 
-        if results:
-            # Collect unique file names from top results
-            seen = []
-            for r in results:
-                src = r.metadata.get("source")
-                if src and src not in seen:
-                    seen.append(src)
+            col1, col2 = st.columns(2)
 
-            st.warning("⚠️ No exact filename match. Showing closest results:")
-            for name in seen:
-                with st.expander(name, expanded=(len(seen) == 1)):
-                    display_pdf(file_map[name], name)
-        else:
-            st.error("❌ No document found")
+            with col1:
+                st.download_button(
+                    "📥 Download",
+                    data=file_bytes,
+                    file_name=name,
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+
+            with col2:
+                if st.button(f"👁 View", key=name):
+                    st.session_state["view_file"] = name
+
+    else:
+        st.error("❌ No document found")
+
+# =========================
+# 👁 VIEW PDF
+# =========================
+if "view_file" in st.session_state:
+    name = st.session_state["view_file"]
+    file_bytes = file_map[name]
+
+    st.markdown(f"### 📄 Viewing: {name}")
+
+    b64 = base64.b64encode(file_bytes).decode("utf-8")
+
+    st.markdown(f"""
+    <iframe src="data:application/pdf;base64,{b64}"
+    width="100%" height="700px"
+    style="border-radius:10px;"></iframe>
+    """, unsafe_allow_html=True)
